@@ -50,6 +50,10 @@ If your main goal is converting scientific papers or complex academic PDFs, a mo
 
 ## Prerequisites
 
+Most Windows users do not need to install anything manually. If you use `CONVERT_DOCS.bat`, the tool will try to set up Python and the required libraries for you automatically.
+
+The manual steps below are mainly for people who want to run the script from the command line or fix a local Python setup themselves.
+
 ### 1. Install Python 3.10 or newer
 
 Download from [python.org](https://www.python.org/downloads/).
@@ -78,8 +82,6 @@ pip install -r requirements_extract.txt
 | `tqdm` | Displays a terminal progress bar |
 
 > Note: Total dependency download is under 50 MB.
-
-If you use `CONVERT_DOCS.bat`, you usually do not need to do this manually. The batch file tries to install what is missing for you.
 
 ---
 
