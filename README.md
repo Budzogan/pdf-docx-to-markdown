@@ -1,6 +1,6 @@
-# doc-to-markdown
+# pdf-docx-to-markdown
 
-Convert PDF and Word (`.docx`) files to clean Markdown locally, with no cloud services or API keys.
+Convert PDF and DOCX files to clean Markdown locally, with no cloud services or API keys.
 
 Designed to produce LLM-ready output with readable structure, preserved images, and usable Markdown for notes, internal docs, specs, and document cleanup.
 
