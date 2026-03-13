@@ -1,0 +1,7 @@
+# Prerequisites for pdf_docx_to_markdown.py
+# Install everything with:  pip install -r requirements_extract.txt
+
+PyMuPDF>=1.23.0       # PDF image extraction (imported as fitz)
+pdfplumber>=0.10.0    # PDF text + table extraction
+python-docx>=1.1.0    # DOCX / Word document conversion (lightweight, no AI)
+tqdm>=4.66.0          # Progress bar in terminal
