@@ -1,3 +1,4 @@
+import logging
 import re
 import sys
 import time
@@ -16,8 +17,12 @@ SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
 SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / "md_output"
 
+logger = logging.getLogger(__name__)
 
-def convert_document_to_markdown(input_path, output_dir=None):
+
+def convert_document_to_markdown(
+    input_path: str | Path, output_dir: str | Path | None = None
+) -> str | None:
     source = Path(input_path).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(f"File not found: {source}")
@@ -26,24 +31,24 @@ def convert_document_to_markdown(input_path, output_dir=None):
     target_dir.mkdir(parents=True, exist_ok=True)
 
     file_size_mb = source.stat().st_size / (1024 * 1024)
-    print(f"\n{'=' * 60}")
-    print(f"  File    : {source.name}")
-    print(f"  Size    : {file_size_mb:.2f} MB")
-    print(f"  Started : {datetime.now().strftime('%H:%M:%S')}")
-    print(f"{'=' * 60}")
+    logger.info(
+        "\n%s\n  File    : %s\n  Size    : %.2f MB\n  Started : %s\n%s",
+        "=" * 60, source.name, file_size_mb,
+        datetime.now().strftime("%H:%M:%S"), "=" * 60,
+    )
 
     t_start = time.time()
 
     if source.suffix.lower() == ".pdf":
         markdown_content = _convert_pdf(source, target_dir)
     else:
-        print("  Processing DOCX...")
+        logger.info("  Processing DOCX...")
         markdown_content = _convert_with_python_docx(source, target_dir)
 
     elapsed = time.time() - t_start
 
     if markdown_content is None:
-        print(f"  ERROR: Failed to convert {source.name}.")
+        logger.error("  ERROR: Failed to convert %s.", source.name)
         return None
 
     md_path = target_dir / f"{source.stem}.md"
@@ -53,26 +58,24 @@ def convert_document_to_markdown(input_path, output_dir=None):
     mins, secs = divmod(int(elapsed), 60)
     time_str = f"{mins}m {secs}s" if mins else f"{secs:.1f}s"
 
-    print(f"\n{'=' * 60}")
-    print("  DONE!")
-    print(f"  Output  : {md_path.name}")
-    print(f"  Size    : {out_size_kb:.1f} KB")
-    print(f"  Time    : {time_str}")
-    print(f"  Finished: {datetime.now().strftime('%H:%M:%S')}")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "\n%s\n  DONE!\n  Output  : %s\n  Size    : %.1f KB\n  Time    : %s\n  Finished: %s\n%s\n",
+        "=" * 60, md_path.name, out_size_kb, time_str,
+        datetime.now().strftime("%H:%M:%S"), "=" * 60,
+    )
     return str(md_path)
 
 
-def _convert_with_python_docx(source, target_dir):
+def _convert_with_python_docx(source: Path, target_dir: Path) -> str | None:
     """Convert DOCX using python-docx - lightweight, no AI/ML dependencies."""
     try:
         from docx.table import Table
         from docx.text.paragraph import Paragraph
 
         doc = Document(str(source))
-        md_lines = []
+        md_lines: list[str] = []
 
-        heading_map = {
+        heading_map: dict[str, str] = {
             "Title": "# ",
             "Subtitle": "## ",
             "Heading 1": "# ",
@@ -83,7 +86,7 @@ def _convert_with_python_docx(source, target_dir):
         }
 
         images_dir = target_dir / f"{source.stem}_images"
-        image_map = {}
+        image_map: dict[str, str] = {}
         try:
             for rel in doc.part.rels.values():
                 if "image" not in rel.reltype:
@@ -140,7 +143,7 @@ def _convert_with_python_docx(source, target_dir):
                 md_lines.append("")
 
         if image_map:
-            print(f"  Extracted {len(image_map)} image(s) to {images_dir}")
+            logger.info("  Extracted %d image(s) to %s", len(image_map), images_dir)
         elif images_dir.exists():
             try:
                 images_dir.rmdir()
@@ -149,23 +152,23 @@ def _convert_with_python_docx(source, target_dir):
 
         return "\n".join(md_lines)
     except Exception as e:
-        print(f"python-docx conversion failed: {e}")
+        logger.error("python-docx conversion failed: %s", e)
         return None
 
 
-def _convert_pdf(source, target_dir):
+def _convert_pdf(source: Path, target_dir: Path) -> str | None:
     """Extract text, tables, and images from PDF using pdfplumber + PyMuPDF."""
     try:
         images_dir = target_dir / f"{source.stem}_images"
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        md_parts = []
+        md_parts: list[str] = []
         image_count = 0
         body_font_size = _detect_body_font_size(source)
 
         fitz_doc = fitz.open(str(source))
         total_pages = len(fitz_doc)
-        page_images = {}
+        page_images: dict[int, list[str]] = {}
 
         for page_num in tqdm(
             range(total_pages),
@@ -176,7 +179,7 @@ def _convert_pdf(source, target_dir):
         ):
             page = fitz_doc[page_num]
             image_list = page.get_images(full=True)
-            page_imgs = []
+            page_imgs: list[str] = []
             for img_idx, img_info in enumerate(image_list):
                 xref = img_info[0]
                 try:
@@ -205,7 +208,7 @@ def _convert_pdf(source, target_dir):
                 page_md = f"<!-- Page {page_num + 1} -->\n\n"
 
                 tables = page.extract_tables()
-                table_bboxes = []
+                table_bboxes: list[tuple[float, float, float, float]] = []
                 if tables:
                     for table in page.find_tables():
                         table_bboxes.append(table.bbox)
@@ -233,7 +236,7 @@ def _convert_pdf(source, target_dir):
                     md_parts.append(page_md.rstrip())
 
         if image_count > 0:
-            print(f"  Extracted {image_count} image(s) to {images_dir}")
+            logger.info("  Extracted %d image(s) to %s", image_count, images_dir)
         else:
             try:
                 images_dir.rmdir()
@@ -241,7 +244,7 @@ def _convert_pdf(source, target_dir):
                 pass
 
         if not md_parts:
-            print(f"Warning: No content extracted from {source.name}")
+            logger.warning("No content extracted from %s", source.name)
             return ""
 
         metadata = (
@@ -254,14 +257,14 @@ def _convert_pdf(source, target_dir):
 
         return metadata + "\n\n---\n\n".join(md_parts)
     except Exception as e:
-        print(f"PDF extraction failed: {e}")
+        logger.error("PDF extraction failed: %s", e)
         return None
 
 
-def _detect_body_font_size(source):
+def _detect_body_font_size(source: Path) -> int:
     """Scan the whole PDF and return the most common font size (= body text)."""
     try:
-        all_sizes = []
+        all_sizes: list[int] = []
         with pdfplumber.open(str(source)) as pdf:
             for page in pdf.pages[:20]:
                 words = page.extract_words(extra_attrs=["size"])
@@ -273,7 +276,7 @@ def _detect_body_font_size(source):
         return 10
 
 
-def _extract_text_with_headings(page, body_font_size):
+def _extract_text_with_headings(page: object, body_font_size: int) -> str:
     """Extract page text, promoting heading lines to markdown # notation."""
     try:
         words = page.extract_words(extra_attrs=["size"])
@@ -283,12 +286,12 @@ def _extract_text_with_headings(page, body_font_size):
     if not words:
         return ""
 
-    line_buckets = {}
+    line_buckets: dict[int, list[dict]] = {}
     for word in words:
         top = round(word["top"] / 3) * 3
         line_buckets.setdefault(top, []).append(word)
 
-    result_lines = []
+    result_lines: list[str] = []
     for top in sorted(line_buckets):
         line_words = line_buckets[top]
         text = " ".join(word["text"] for word in line_words).strip()
@@ -318,19 +321,19 @@ def _extract_text_with_headings(page, body_font_size):
     return "\n".join(result_lines)
 
 
-def _table_to_markdown(table):
+def _table_to_markdown(table: list[list[str | None]]) -> str:
     """Convert a pdfplumber table (list of lists) to markdown table format."""
     if not table:
         return ""
 
-    clean = []
+    clean: list[list[str]] = []
     for row in table:
         clean.append([_escape_markdown_cell(cell) for cell in row])
 
     if not clean:
         return ""
 
-    lines = []
+    lines: list[str] = []
     lines.append("| " + " | ".join(clean[0]) + " |")
     lines.append("| " + " | ".join(["---"] * len(clean[0])) + " |")
 
@@ -342,9 +345,11 @@ def _table_to_markdown(table):
     return "\n".join(lines)
 
 
-def _extract_docx_paragraph_content(para, source_stem, image_map):
+def _extract_docx_paragraph_content(
+    para: object, source_stem: str, image_map: dict[str, str]
+) -> str:
     """Return paragraph content with images inserted in run order."""
-    parts = []
+    parts: list[str] = []
 
     for run in para.runs:
         if run.text:
@@ -364,7 +369,7 @@ def _extract_docx_paragraph_content(para, source_stem, image_map):
     return "".join(parts)
 
 
-def _escape_markdown_cell(cell):
+def _escape_markdown_cell(cell: str | None) -> str:
     """Normalize table cell content so it renders safely in Markdown tables."""
     if cell is None:
         return ""
@@ -376,7 +381,12 @@ def _escape_markdown_cell(cell):
     return text
 
 
-def main():
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
     batch_start = time.time()
 
     if len(sys.argv) > 1:
@@ -387,10 +397,10 @@ def main():
 
     files = [file for file in SCRIPT_DIR.iterdir() if file.suffix.lower() in SUPPORTED_EXTENSIONS]
     if not files:
-        print(f"No .docx or .pdf files found in {SCRIPT_DIR}")
+        logger.info("No .docx or .pdf files found in %s", SCRIPT_DIR)
         return 0
 
-    print(f"\nFound {len(files)} file(s) to convert.")
+    logger.info("\nFound %d file(s) to convert.", len(files))
     ok, failed = 0, 0
 
     for i, file in enumerate(files):
@@ -411,10 +421,10 @@ def main():
     total_elapsed = time.time() - batch_start
     mins, secs = divmod(int(total_elapsed), 60)
     time_str = f"{mins}m {secs}s" if mins else f"{secs:.1f}s"
-    print(f"\n{'#' * 60}")
-    print(f"  ALL DONE - {ok} converted, {failed} failed")
-    print(f"  Total time: {time_str}")
-    print(f"{'#' * 60}\n")
+    logger.info(
+        "\n%s\n  ALL DONE - %d converted, %d failed\n  Total time: %s\n%s\n",
+        "#" * 60, ok, failed, time_str, "#" * 60,
+    )
     return 1 if failed else 0
 
 
@@ -422,11 +432,11 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except FileNotFoundError as exc:
-        print(f"ERROR: {exc}")
+        logger.error("ERROR: %s", exc)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nStopped by user.")
         sys.exit(130)
     except Exception as exc:
-        print(f"ERROR: Unexpected failure: {exc}")
+        logger.error("ERROR: Unexpected failure: %s", exc)
         sys.exit(1)
