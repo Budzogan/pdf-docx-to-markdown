@@ -150,3 +150,56 @@ class TestDOCXConversion:
         content = Path(result).read_text(encoding="utf-8")
         assert "| Name | Value |" in content
         assert "| foo | bar |" in content
+
+    def test_docx_merged_cells(self, tmp_path: Path):
+        """Horizontally merged cells should not produce duplicate columns."""
+        docx_path = tmp_path / "merged.docx"
+        doc = Document()
+        table = doc.add_table(rows=2, cols=3)
+        table.cell(0, 0).text = "A"
+        table.cell(0, 1).text = "B"
+        table.cell(0, 2).text = "C"
+        # Merge row 1, cols 0-1.
+        table.cell(1, 0).merge(table.cell(1, 1))
+        table.cell(1, 0).text = "Merged"
+        table.cell(1, 2).text = "Solo"
+        doc.save(str(docx_path))
+
+        result = convert_document_to_markdown(docx_path, tmp_path)
+
+        content = Path(result).read_text(encoding="utf-8")
+        assert "| A | B | C |" in content
+        # Merged cell should appear once, with an empty placeholder for the span.
+        assert "Merged" in content
+        assert "Solo" in content
+
+    def test_docx_nested_table(self, tmp_path: Path):
+        """Nested tables inside cells should be rendered inline."""
+        from docx.oxml.ns import qn as _qn
+
+        docx_path = tmp_path / "nested.docx"
+        doc = Document()
+        outer = doc.add_table(rows=1, cols=2)
+        outer.cell(0, 0).text = "Left"
+        # Insert a nested table into cell (0,1).
+        inner_tbl = outer.cell(0, 1)._element.makeelement(_qn("w:tbl"), {})
+        outer.cell(0, 1)._element.append(inner_tbl)
+        # Add a row to the nested table via XML.
+        tr = inner_tbl.makeelement(_qn("w:tr"), {})
+        inner_tbl.append(tr)
+        tc = tr.makeelement(_qn("w:tc"), {})
+        tr.append(tc)
+        p = tc.makeelement(_qn("w:p"), {})
+        tc.append(p)
+        r = p.makeelement(_qn("w:r"), {})
+        p.append(r)
+        t = r.makeelement(_qn("w:t"), {})
+        t.text = "Nested"
+        r.append(t)
+        doc.save(str(docx_path))
+
+        result = convert_document_to_markdown(docx_path, tmp_path)
+
+        content = Path(result).read_text(encoding="utf-8")
+        assert "Left" in content
+        assert "Nested" in content
