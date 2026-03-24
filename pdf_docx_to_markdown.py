@@ -608,7 +608,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.file:
         if args.dry_run:
             source = Path(args.file).expanduser().resolve()
-            size_mb = source.stat().st_size / (1024 * 1024) if source.exists() else 0
+            if not source.exists():
+                logger.error("File not found: %s", source)
+                return 1
+            if source.suffix.lower() not in {".pdf", ".docx"}:
+                logger.error("Unsupported file type: %s (expected .pdf or .docx)", source.name)
+                return 1
+            size_mb = source.stat().st_size / (1024 * 1024)
             logger.info("  [dry-run] Would convert: %s (%.2f MB)", source.name, size_mb)
             return 0
         result = convert_document_to_markdown(args.file, output_dir, config=cfg)

@@ -24,7 +24,7 @@ That is the main way this tool is meant to be used on Windows.
 
 - Converts `.pdf` and `.docx` files to `.md`
 - Extracts and saves images from PDFs
-- Detects headings, tables, and multi-column layouts
+- Detects headings and tables (note: multi-column PDFs are not fully supported and may produce merged text)
 - Processes multiple files in one run with a `y/n` prompt between each
 - Shows a progress bar and timing in the terminal for each file
 - Runs fully offline after first install
@@ -120,7 +120,7 @@ python pdf_docx_to_markdown.py "path/to/file.pdf"
 Convert a specific file to a custom output folder:
 
 ```bash
-python pdf_docx_to_markdown.py "path/to/file.pdf" "path/to/output/"
+python pdf_docx_to_markdown.py "path/to/file.pdf" -o "path/to/output/"
 ```
 
 ---
