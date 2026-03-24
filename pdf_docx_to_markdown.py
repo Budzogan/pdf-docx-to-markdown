@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import logging
 import re
@@ -7,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
 
@@ -337,7 +340,7 @@ def _detect_body_font_size(source: Path, sample_pages: int = 20) -> int:
 
 
 def _extract_text_with_headings(
-    page: object, body_font_size: int, cfg: ConversionConfig | None = None
+    page: Any, body_font_size: int, cfg: ConversionConfig | None = None
 ) -> str:
     """Extract page text, promoting heading lines to markdown # notation."""
     if cfg is None:
@@ -402,15 +405,15 @@ def _table_to_markdown(table: list[list[str | None]]) -> str:
     lines.append("| " + " | ".join(clean[0]) + " |")
     lines.append("| " + " | ".join(["---"] * len(clean[0])) + " |")
 
-    for row in clean[1:]:
-        while len(row) < len(clean[0]):
-            row.append("")
-        lines.append("| " + " | ".join(row[: len(clean[0])]) + " |")
+    for clean_row in clean[1:]:
+        while len(clean_row) < len(clean[0]):
+            clean_row.append("")
+        lines.append("| " + " | ".join(clean_row[: len(clean[0])]) + " |")
 
     return "\n".join(lines)
 
 
-def _docx_table_to_markdown(table: object, doc: object) -> list[str]:
+def _docx_table_to_markdown(table: Any, doc: Any) -> list[str]:
     """Convert a python-docx Table to markdown lines, handling merged cells and nested tables."""
     from docx.table import Table as DocxTable
 
@@ -460,7 +463,7 @@ def _docx_table_to_markdown(table: object, doc: object) -> list[str]:
 
 
 def _extract_docx_paragraph_content(
-    para: object, source_stem: str, image_map: dict[str, str]
+    para: Any, source_stem: str, image_map: dict[str, str]
 ) -> str:
     """Return paragraph content with images inserted in run order."""
     parts: list[str] = []
