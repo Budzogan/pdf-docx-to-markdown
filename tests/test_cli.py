@@ -1,10 +1,13 @@
-"""Tests for the CLI argument parser and batch-mode helpers."""
+"""Tests for the CLI argument parser, batch-mode helpers, and dry-run."""
 
 from pathlib import Path
+
+import fitz
 
 from pdf_docx_to_markdown import (
     _build_argument_parser,
     _collect_files,
+    main,
     ConversionConfig,
 )
 
@@ -15,6 +18,7 @@ class TestArgumentParser:
         assert args.file is None
         assert args.output_dir is None
         assert args.recursive is False
+        assert args.dry_run is False
         assert args.verbose is False
         assert args.quiet is False
         assert args.h1_threshold == 6
@@ -33,6 +37,12 @@ class TestArgumentParser:
     def test_recursive_flag(self):
         args = _build_argument_parser().parse_args(["-r"])
         assert args.recursive is True
+
+    def test_dry_run_flag(self):
+        args = _build_argument_parser().parse_args(["-n"])
+        assert args.dry_run is True
+        args = _build_argument_parser().parse_args(["--dry-run"])
+        assert args.dry_run is True
 
     def test_verbose_and_quiet(self):
         args = _build_argument_parser().parse_args(["-v"])
@@ -99,3 +109,30 @@ class TestConversionConfig:
         cfg = ConversionConfig(heading1_threshold=10, font_sample_pages=50)
         assert cfg.heading1_threshold == 10
         assert cfg.font_sample_pages == 50
+
+
+class TestDryRun:
+    def test_dry_run_single_file(self, tmp_path: Path):
+        pdf_path = tmp_path / "sample.pdf"
+        doc = fitz.open()
+        doc.new_page()
+        doc.save(str(pdf_path))
+        doc.close()
+
+        ret = main([str(pdf_path), "-o", str(tmp_path), "-n"])
+        assert ret == 0
+        # No .md file should be created.
+        assert not list(tmp_path.glob("*.md"))
+
+    def test_dry_run_batch(self, tmp_path: Path, monkeypatch):
+        # Seed files in a temp dir and point SCRIPT_DIR there.
+        (tmp_path / "a.pdf").write_bytes(b"%PDF-fake")
+        (tmp_path / "b.docx").write_bytes(b"fake")
+
+        import pdf_docx_to_markdown as mod
+        monkeypatch.setattr(mod, "SCRIPT_DIR", tmp_path)
+        monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path / "out")
+
+        ret = main(["-n"])
+        assert ret == 0
+        assert not (tmp_path / "out").exists()

@@ -1,0 +1,9 @@
+# Pinned dependency versions for reproducible installs.
+# Generated from a working environment — update periodically.
+#
+# To use:  pip install -r requirements_lock.txt
+
+PyMuPDF==1.27.2.2
+pdfplumber==0.11.9
+python-docx==1.2.0
+tqdm==4.67.3

@@ -171,19 +171,8 @@ def _convert_with_python_docx(source: Path, target_dir: Path) -> str | None:
 
             elif tag == "tbl":
                 table = Table(element, doc)
-                rows = table.rows
-                if not rows:
-                    continue
-
-                header = [_escape_markdown_cell(cell.text) for cell in rows[0].cells]
                 md_lines.append("")
-                md_lines.append("| " + " | ".join(header) + " |")
-                md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
-
-                for row in rows[1:]:
-                    cells = [_escape_markdown_cell(cell.text) for cell in row.cells]
-                    md_lines.append("| " + " | ".join(cells) + " |")
-
+                md_lines.extend(_docx_table_to_markdown(table, doc))
                 md_lines.append("")
 
         if image_map:
@@ -421,6 +410,55 @@ def _table_to_markdown(table: list[list[str | None]]) -> str:
     return "\n".join(lines)
 
 
+def _docx_table_to_markdown(table: object, doc: object) -> list[str]:
+    """Convert a python-docx Table to markdown lines, handling merged cells and nested tables."""
+    from docx.table import Table as DocxTable
+
+    rows = table.rows
+    if not rows:
+        return []
+
+    # De-duplicate horizontally merged cells.
+    # python-docx repeats the same Cell object for each grid column it spans.
+    def _dedup_row(row) -> list[str]:
+        seen_ids: set[int] = set()
+        cells: list[str] = []
+        for cell in row.cells:
+            cid = id(cell._element)
+            if cid in seen_ids:
+                cells.append("")  # merged continuation → empty
+            else:
+                seen_ids.add(cid)
+                # Check for nested tables inside the cell.
+                nested = cell._element.findall(qn("w:tbl"))
+                if nested:
+                    parts = [cell.text.strip()]
+                    for ntbl_el in nested:
+                        ntbl = DocxTable(ntbl_el, doc)
+                        nested_lines = _docx_table_to_markdown(ntbl, doc)
+                        parts.append(" ".join(nested_lines))
+                    cells.append(_escape_markdown_cell(" | ".join(p for p in parts if p)))
+                else:
+                    cells.append(_escape_markdown_cell(cell.text))
+        return cells
+
+    header = _dedup_row(rows[0])
+    col_count = len(header)
+    lines: list[str] = []
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join(["---"] * col_count) + " |")
+
+    for row in rows[1:]:
+        cells = _dedup_row(row)
+        # Pad or trim to match header width.
+        while len(cells) < col_count:
+            cells.append("")
+        cells = cells[:col_count]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    return lines
+
+
 def _extract_docx_paragraph_content(
     para: object, source_stem: str, image_map: dict[str, str]
 ) -> str:
@@ -494,6 +532,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="In batch mode, recurse into subdirectories.",
     )
     parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="List files that would be converted without actually converting.",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug-level logging.",
@@ -560,6 +603,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── Single-file mode ──────────────────────────────────────────────
     if args.file:
+        if args.dry_run:
+            source = Path(args.file).expanduser().resolve()
+            size_mb = source.stat().st_size / (1024 * 1024) if source.exists() else 0
+            logger.info("  [dry-run] Would convert: %s (%.2f MB)", source.name, size_mb)
+            return 0
         result = convert_document_to_markdown(args.file, output_dir, config=cfg)
         return 0 if result else 1
 
@@ -567,6 +615,17 @@ def main(argv: list[str] | None = None) -> int:
     files = _collect_files(SCRIPT_DIR, recursive=args.recursive)
     if not files:
         logger.info("No .docx or .pdf files found in %s", SCRIPT_DIR)
+        return 0
+
+    if args.dry_run:
+        logger.info("\n[dry-run] %d file(s) would be converted:\n", len(files))
+        total_size = 0.0
+        for f in files:
+            size_mb = f.stat().st_size / (1024 * 1024)
+            total_size += size_mb
+            rel = f.relative_to(SCRIPT_DIR) if f.is_relative_to(SCRIPT_DIR) else f
+            logger.info("  %-50s  %.2f MB", rel, size_mb)
+        logger.info("\n  Total: %.2f MB across %d file(s)", total_size, len(files))
         return 0
 
     logger.info("\nFound %d file(s) to convert.", len(files))
