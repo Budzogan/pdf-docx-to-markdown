@@ -310,8 +310,8 @@ def _convert_pdf(
             if scanned_page_count == total_pages:
                 logger.warning(
                     "  This PDF seems to be fully scanned / image-based. "
-                    "Consider running an OCR tool (e.g. Tesseract, Adobe Acrobat) "
-                    "to add a text layer before converting."
+                    "Consider using an OCR converter such as "
+                    "https://github.com/Budzogan/pdf-image-ocr-to-markdown"
                 )
 
         if not md_parts:
