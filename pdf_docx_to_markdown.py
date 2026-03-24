@@ -1,8 +1,10 @@
+import argparse
 import logging
 import re
 import sys
 import time
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -20,15 +22,49 @@ OUTPUT_DIR = SCRIPT_DIR / "md_output"
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ConversionConfig:
+    """Configurable thresholds and limits for document conversion."""
+
+    # Font-size difference thresholds for heading detection (PDF only).
+    heading1_threshold: int = 6
+    heading2_threshold: int = 3
+    heading3_threshold: int = 1
+
+    # Maximum pages sampled when detecting the body font size.
+    font_sample_pages: int = 20
+
+    # Output directory (None = same directory as source file).
+    output_dir: Path | None = None
+
+
+# Singleton default used when callers don't pass an explicit config.
+_DEFAULT_CONFIG = ConversionConfig()
+
+
 def convert_document_to_markdown(
-    input_path: str | Path, output_dir: str | Path | None = None
+    input_path: str | Path,
+    output_dir: str | Path | None = None,
+    config: ConversionConfig | None = None,
 ) -> str | None:
+    cfg = config or _DEFAULT_CONFIG
     source = Path(input_path).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(f"File not found: {source}")
 
-    target_dir = Path(output_dir).expanduser().resolve() if output_dir else source.parent
-    target_dir.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        logger.error(
+            "Unsupported file type '%s'. Supported: %s",
+            source.suffix, ", ".join(sorted(SUPPORTED_EXTENSIONS)),
+        )
+        return None
+
+    effective_output = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir
+        else (cfg.output_dir.expanduser().resolve() if cfg.output_dir else source.parent)
+    )
+    effective_output.mkdir(parents=True, exist_ok=True)
 
     file_size_mb = source.stat().st_size / (1024 * 1024)
     logger.info(
@@ -40,10 +76,10 @@ def convert_document_to_markdown(
     t_start = time.time()
 
     if source.suffix.lower() == ".pdf":
-        markdown_content = _convert_pdf(source, target_dir)
+        markdown_content = _convert_pdf(source, effective_output, cfg)
     else:
         logger.info("  Processing DOCX...")
-        markdown_content = _convert_with_python_docx(source, target_dir)
+        markdown_content = _convert_with_python_docx(source, effective_output)
 
     elapsed = time.time() - t_start
 
@@ -51,7 +87,7 @@ def convert_document_to_markdown(
         logger.error("  ERROR: Failed to convert %s.", source.name)
         return None
 
-    md_path = target_dir / f"{source.stem}.md"
+    md_path = effective_output / f"{source.stem}.md"
     md_path.write_text(markdown_content, encoding="utf-8")
 
     out_size_kb = md_path.stat().st_size / 1024
@@ -100,7 +136,15 @@ def _convert_with_python_docx(source: Path, target_dir: Path) -> str | None:
         except Exception:
             pass
 
-        for element in doc.element.body:
+        elements = list(doc.element.body)
+        for element in tqdm(
+            elements,
+            desc="  Processing elements",
+            unit="el",
+            ncols=60,
+            ascii=True,
+            disable=len(elements) < 50,
+        ):
             tag = element.tag.split("}")[-1]
 
             if tag == "p":
@@ -156,7 +200,9 @@ def _convert_with_python_docx(source: Path, target_dir: Path) -> str | None:
         return None
 
 
-def _convert_pdf(source: Path, target_dir: Path) -> str | None:
+def _convert_pdf(
+    source: Path, target_dir: Path, cfg: ConversionConfig
+) -> str | None:
     """Extract text, tables, and images from PDF using pdfplumber + PyMuPDF."""
     try:
         images_dir = target_dir / f"{source.stem}_images"
@@ -164,7 +210,7 @@ def _convert_pdf(source: Path, target_dir: Path) -> str | None:
 
         md_parts: list[str] = []
         image_count = 0
-        body_font_size = _detect_body_font_size(source)
+        body_font_size = _detect_body_font_size(source, cfg.font_sample_pages)
 
         fitz_doc = fitz.open(str(source))
         total_pages = len(fitz_doc)
@@ -196,6 +242,9 @@ def _convert_pdf(source: Path, target_dir: Path) -> str | None:
             page_images[page_num] = page_imgs
         fitz_doc.close()
 
+        # Track pages that look scanned (images but no text).
+        scanned_page_count = 0
+
         with pdfplumber.open(str(source)) as pdf:
             for page_num, page in tqdm(
                 enumerate(pdf.pages),
@@ -220,13 +269,20 @@ def _convert_pdf(source: Path, target_dir: Path) -> str | None:
                 else:
                     filtered_page = page
 
-                text = _extract_text_with_headings(filtered_page, body_font_size)
+                text = _extract_text_with_headings(
+                    filtered_page, body_font_size, cfg
+                )
+                has_text = bool(text.strip()) or bool(tables)
                 if text.strip():
                     page_md += text.strip() + "\n\n"
 
                 for table in tables:
                     if table and len(table) > 0:
                         page_md += _table_to_markdown(table) + "\n\n"
+
+                page_has_images = bool(page_images.get(page_num))
+                if page_has_images and not has_text:
+                    scanned_page_count += 1
 
                 for img_file in page_images.get(page_num, []):
                     rel_path = f"{source.stem}_images/{img_file}"
@@ -242,6 +298,21 @@ def _convert_pdf(source: Path, target_dir: Path) -> str | None:
                 images_dir.rmdir()
             except OSError:
                 pass
+
+        # Warn about likely scanned pages.
+        if scanned_page_count > 0:
+            pct = scanned_page_count / total_pages * 100
+            logger.warning(
+                "  WARNING: %d of %d page(s) (%.0f%%) appear to be scanned "
+                "(images found but no extractable text).",
+                scanned_page_count, total_pages, pct,
+            )
+            if scanned_page_count == total_pages:
+                logger.warning(
+                    "  This PDF seems to be fully scanned / image-based. "
+                    "Consider running an OCR tool (e.g. Tesseract, Adobe Acrobat) "
+                    "to add a text layer before converting."
+                )
 
         if not md_parts:
             logger.warning("No content extracted from %s", source.name)
@@ -261,12 +332,12 @@ def _convert_pdf(source: Path, target_dir: Path) -> str | None:
         return None
 
 
-def _detect_body_font_size(source: Path) -> int:
+def _detect_body_font_size(source: Path, sample_pages: int = 20) -> int:
     """Scan the whole PDF and return the most common font size (= body text)."""
     try:
         all_sizes: list[int] = []
         with pdfplumber.open(str(source)) as pdf:
-            for page in pdf.pages[:20]:
+            for page in pdf.pages[:sample_pages]:
                 words = page.extract_words(extra_attrs=["size"])
                 all_sizes.extend(round(word["size"]) for word in words if word.get("size"))
         if not all_sizes:
@@ -276,8 +347,13 @@ def _detect_body_font_size(source: Path) -> int:
         return 10
 
 
-def _extract_text_with_headings(page: object, body_font_size: int) -> str:
+def _extract_text_with_headings(
+    page: object, body_font_size: int, cfg: ConversionConfig | None = None
+) -> str:
     """Extract page text, promoting heading lines to markdown # notation."""
+    if cfg is None:
+        cfg = _DEFAULT_CONFIG
+
     try:
         words = page.extract_words(extra_attrs=["size"])
     except Exception:
@@ -302,11 +378,11 @@ def _extract_text_with_headings(page: object, body_font_size: int) -> str:
         avg_size = round(sum(sizes) / len(sizes)) if sizes else body_font_size
         diff = avg_size - body_font_size
 
-        if diff >= 6:
+        if diff >= cfg.heading1_threshold:
             text = f"# {text}"
-        elif diff >= 3:
+        elif diff >= cfg.heading2_threshold:
             text = f"## {text}"
-        elif diff >= 1:
+        elif diff >= cfg.heading3_threshold:
             text = f"### {text}"
         else:
             if re.match(r"^\d+\.\d+\.\d+[\s\.]", text) and len(text) < 120:
@@ -381,21 +457,114 @@ def _escape_markdown_cell(cell: str | None) -> str:
     return text
 
 
-def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
+def _collect_files(root: Path, recursive: bool = False) -> list[Path]:
+    """Collect convertible files from *root*, optionally recursing."""
+    if recursive:
+        files = [
+            p for p in root.rglob("*")
+            if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()
+        ]
+    else:
+        files = [
+            p for p in root.iterdir()
+            if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file()
+        ]
+    return sorted(files)
+
+
+def _build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="pdf-docx-to-markdown",
+        description="Convert PDF and DOCX files to clean Markdown.",
+    )
+    parser.add_argument(
+        "file",
+        nargs="?",
+        help="Path to a single .pdf or .docx file to convert. "
+             "If omitted, all supported files in the script directory are converted.",
+    )
+    parser.add_argument(
+        "-o", "--output-dir",
+        default=None,
+        help="Directory for the generated .md files (default: md_output/).",
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="In batch mode, recurse into subdirectories.",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable debug-level logging.",
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Suppress all output except errors.",
+    )
+    parser.add_argument(
+        "--h1-threshold",
+        type=int,
+        default=6,
+        metavar="PT",
+        help="Font-size difference (in pt) above body text to classify as H1 (default: 6).",
+    )
+    parser.add_argument(
+        "--h2-threshold",
+        type=int,
+        default=3,
+        metavar="PT",
+        help="Font-size difference (in pt) above body text to classify as H2 (default: 3).",
+    )
+    parser.add_argument(
+        "--h3-threshold",
+        type=int,
+        default=1,
+        metavar="PT",
+        help="Font-size difference (in pt) above body text to classify as H3 (default: 1).",
+    )
+    parser.add_argument(
+        "--font-sample-pages",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Max pages sampled for body font-size detection (default: 20).",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_argument_parser()
+    args = parser.parse_args(argv)
+
+    # Configure logging level.
+    if args.quiet:
+        log_level = logging.ERROR
+    elif args.verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+
+    logging.basicConfig(level=log_level, format="%(message)s")
+
+    cfg = ConversionConfig(
+        heading1_threshold=args.h1_threshold,
+        heading2_threshold=args.h2_threshold,
+        heading3_threshold=args.h3_threshold,
+        font_sample_pages=args.font_sample_pages,
     )
 
+    output_dir = Path(args.output_dir) if args.output_dir else OUTPUT_DIR
     batch_start = time.time()
 
-    if len(sys.argv) > 1:
-        input_path = sys.argv[1]
-        output_dir = sys.argv[2] if len(sys.argv) > 2 else OUTPUT_DIR
-        result = convert_document_to_markdown(input_path, output_dir)
+    # ── Single-file mode ──────────────────────────────────────────────
+    if args.file:
+        result = convert_document_to_markdown(args.file, output_dir, config=cfg)
         return 0 if result else 1
 
-    files = [file for file in SCRIPT_DIR.iterdir() if file.suffix.lower() in SUPPORTED_EXTENSIONS]
+    # ── Batch mode ────────────────────────────────────────────────────
+    files = _collect_files(SCRIPT_DIR, recursive=args.recursive)
     if not files:
         logger.info("No .docx or .pdf files found in %s", SCRIPT_DIR)
         return 0
@@ -404,7 +573,7 @@ def main() -> int:
     ok, failed = 0, 0
 
     for i, file in enumerate(files):
-        result = convert_document_to_markdown(file, OUTPUT_DIR)
+        result = convert_document_to_markdown(file, output_dir, config=cfg)
         if result:
             ok += 1
         else:
