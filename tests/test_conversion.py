@@ -1,12 +1,12 @@
 """Integration tests using small in-memory PDF and DOCX files."""
 
-import tempfile
+import logging
 from pathlib import Path
 
 import fitz  # PyMuPDF
 from docx import Document
 
-from pdf_docx_to_markdown import convert_document_to_markdown
+from pdf_docx_to_markdown import convert_document_to_markdown, ConversionConfig
 
 
 def _make_simple_pdf(path: Path) -> None:
@@ -25,6 +25,29 @@ def _make_simple_docx(path: Path) -> None:
     doc.add_heading("Test Heading", level=1)
     doc.add_paragraph("This is a test paragraph.")
     doc.save(str(path))
+
+
+def _make_image_only_pdf(path: Path) -> None:
+    """Create a PDF with an image but no text (simulates scanned page)."""
+    doc = fitz.open()
+    page = doc.new_page()
+    # Insert a tiny 2x2 red PNG as an image.
+    import struct, zlib
+    def _make_tiny_png() -> bytes:
+        raw = b"\x00\xff\x00\x00\xff\x00\x00\xff\x00\x00\xff\x00"
+        compressed = zlib.compress(raw)
+        def chunk(ctype, data):
+            c = ctype + data
+            return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", compressed)
+            + chunk(b"IEND", b"")
+        )
+    page.insert_image(fitz.Rect(50, 50, 200, 200), stream=_make_tiny_png())
+    doc.save(str(path))
+    doc.close()
 
 
 class TestPDFConversion:
@@ -57,6 +80,35 @@ class TestPDFConversion:
 
         with pytest.raises(FileNotFoundError):
             convert_document_to_markdown(tmp_path / "nonexistent.pdf", tmp_path)
+
+    def test_unsupported_extension_returns_none(self, tmp_path: Path):
+        txt_path = tmp_path / "readme.txt"
+        txt_path.write_text("hello")
+
+        result = convert_document_to_markdown(txt_path, tmp_path)
+        assert result is None
+
+    def test_custom_config_thresholds(self, tmp_path: Path):
+        pdf_path = tmp_path / "cfg.pdf"
+        _make_simple_pdf(pdf_path)
+
+        cfg = ConversionConfig(
+            heading1_threshold=10,
+            heading2_threshold=8,
+            heading3_threshold=5,
+        )
+        result = convert_document_to_markdown(pdf_path, tmp_path, config=cfg)
+        assert result is not None
+
+    def test_scanned_pdf_warning(self, tmp_path: Path, caplog):
+        pdf_path = tmp_path / "scanned.pdf"
+        _make_image_only_pdf(pdf_path)
+
+        with caplog.at_level(logging.WARNING):
+            convert_document_to_markdown(pdf_path, tmp_path)
+
+        assert any("scanned" in r.message.lower() or "image" in r.message.lower()
+                    for r in caplog.records if r.levelno >= logging.WARNING)
 
 
 class TestDOCXConversion:
