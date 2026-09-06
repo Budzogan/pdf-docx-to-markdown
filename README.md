@@ -18,14 +18,16 @@ If you just want to use it and do not care about the technical details:
 
 That is the main way this tool is meant to be used on Windows.
 
+The batch file creates a local `.venv` in this folder (not a global Python install) and converts every PDF/DOCX in the folder without asking `y/n` between files.
+
 ---
 
 ## What it does
 
 - Converts `.pdf` and `.docx` files to `.md`
-- Extracts and saves images from PDFs
+- Extracts and saves images from PDFs and DOCX files (skips tiny decorative images and EMF/WMF)
 - Detects headings and tables (note: multi-column PDFs are not fully supported and may produce merged text)
-- Processes multiple files in one run with a `y/n` prompt between each
+- Processes multiple files in one run (`CONVERT_DOCS.bat` and `-y` run without prompts)
 - Shows a progress bar and timing in the terminal for each file
 - Runs fully offline after first install
 
@@ -50,7 +52,7 @@ If your main goal is converting scientific papers or complex academic PDFs, a mo
 
 ## Prerequisites
 
-Most Windows users do not need to install anything manually. If you use `CONVERT_DOCS.bat`, the tool will try to set up Python and the required libraries for you automatically.
+Most Windows users do not need to install anything manually. If you use `CONVERT_DOCS.bat`, the tool will try to set up Python 3.10+ and the required libraries for you automatically.
 
 The manual steps below are mainly for people who want to run the script from the command line or fix a local Python setup themselves.
 
@@ -74,6 +76,12 @@ Open a terminal in this folder and run:
 pip install -r requirements_extract.txt
 ```
 
+Or, from a clone:
+
+```bash
+pip install -e ".[dev]"
+```
+
 | Package | Purpose |
 |---|---|
 | `PyMuPDF` | Extracts images from PDFs |
@@ -95,20 +103,20 @@ pip install -r requirements_extract.txt
 
 What the batch file does:
 
-1. Checks whether Python is already installed.
+1. Checks for Python 3.10 or newer (`py -3`, then `python`).
 2. If Python is missing, it tries to install it automatically.
-3. Installs the required Python libraries.
-4. Runs the converter.
+3. Creates a local `.venv` and installs libraries only if they are missing.
+4. Runs the converter with `-y` (no prompt between files).
 5. Opens the output folder when finished.
 
 On the first run, setup can take a few minutes.
 
 ### Option B - Command line
 
-Convert all files in the folder:
+Convert all PDF/DOCX files in the **current directory**:
 
 ```bash
-python pdf_docx_to_markdown.py
+python pdf_docx_to_markdown.py -y
 ```
 
 Convert a specific file:
@@ -122,6 +130,20 @@ Convert a specific file to a custom output folder:
 ```bash
 python pdf_docx_to_markdown.py "path/to/file.pdf" -o "path/to/output/"
 ```
+
+| Flag | Meaning |
+|---|---|
+| `-o`, `--output-dir` | Output folder (default: `./md_output/`) |
+| `-r`, `--recursive` | In batch mode, include subfolders |
+| `-n`, `--dry-run` | List files that would be converted |
+| `-y`, `--yes` | Do not prompt between files |
+| `-v`, `--verbose` | Debug logging |
+| `-q`, `--quiet` | Errors only |
+| `--h1-threshold`, `--h2-threshold`, `--h3-threshold` | PDF heading font-size gaps (pt) |
+| `--font-sample-pages` | Pages sampled to detect body font size |
+| `--version` | Print version |
+
+Without `-y`, batch mode asks `Continue? [Y/n]` between files (Enter = yes). The prompt is skipped when stdin is not a terminal.
 
 ---
 
@@ -153,9 +175,6 @@ After conversion, you get:
   Time    : 22s
   Finished: 14:32:27
 ============================================================
-
-  Next: annex.docx  (1 file(s) remaining)
-  Continue? [y/n]:
 ```
 
 ---
@@ -175,14 +194,15 @@ md_output/
 
 ## How it works
 
-- **PDF**: `pdfplumber` extracts text and tables, while `PyMuPDF` extracts images. Headings are detected by comparing font sizes to the body text size.
-- **DOCX**: `python-docx` reads the Word XML directly. Heading styles, tables, lists, and embedded images are extracted without AI models.
+- **PDF**: `pdfplumber` extracts text and tables, while `PyMuPDF` extracts images. Headings are detected by comparing font sizes to the body text size. Text, tables, and images are interleaved by vertical position on the page.
+- **DOCX**: `python-docx` reads the Word XML directly. Heading styles (including Heading 6), tables, numbered/bulleted lists, hyperlinks, and embedded images are extracted without AI models.
 
 ---
 
 ## Known Limitations
 
 - PDF conversion quality depends heavily on how well the original PDF is structured
+- Multi-column PDFs are not fully supported and may produce merged text
 - Very complex layouts can still produce imperfect reading order
 - Scientific papers, equations, references, and multi-layer academic formatting are not the main target
 - Scanned PDFs without usable text layers may need OCR-focused tools instead
@@ -195,7 +215,7 @@ This tool aims to be practical, lightweight, and local-first. It is not trying t
 ## Notes
 
 - Progress bars use ASCII characters so they display more reliably in Windows terminals.
-- The batch file uses `python -m pip`, so the common `pip.exe is not on PATH` warning is not a blocker for normal use.
+- The batch file uses `python -m pip` inside `.venv`, so the common `pip.exe is not on PATH` warning is not a blocker for normal use.
 - `CONVERT_DOCS.bat` is the easiest option for non-technical Windows users.
 
 ---
@@ -205,9 +225,12 @@ This tool aims to be practical, lightweight, and local-first. It is not trying t
 | File | Purpose |
 |---|---|
 | `pdf_docx_to_markdown.py` | Main conversion script |
-| `requirements_extract.txt` | Python dependencies |
+| `pyproject.toml` | Package metadata and dependencies |
+| `requirements_extract.txt` | Python dependencies for the batch installer |
 | `CONVERT_DOCS.bat` | One-click runner for Windows |
+| `tests/` | pytest suite |
 | `README.md` | Project documentation |
+| `LICENSE` | MIT license |
 
 ---
 

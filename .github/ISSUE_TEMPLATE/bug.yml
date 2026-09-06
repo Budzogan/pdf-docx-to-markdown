@@ -1,0 +1,40 @@
+name: Bug report
+description: Conversion quality problem or crash
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: file_type
+    attributes:
+      label: Source file type
+      options:
+        - PDF
+        - DOCX
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: pages
+    attributes:
+      label: Page or section count (approx)
+      placeholder: "e.g. 12 pages"
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Markdown
+      description: What you wanted the output to look like.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Markdown
+      description: Paste a short excerpt of what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: How you ran the converter (CONVERT_DOCS.bat or command line).
+    validations:
+      required: true

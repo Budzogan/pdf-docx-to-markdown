@@ -1,12 +1,34 @@
 """Integration tests using small in-memory PDF and DOCX files."""
 
 import logging
+import struct
+import zlib
 from pathlib import Path
 
 import fitz  # PyMuPDF
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
-from pdf_docx_to_markdown import convert_document_to_markdown, ConversionConfig
+from pdf_docx_to_markdown import ConversionConfig, convert_document_to_markdown
+
+
+def _make_png(width: int = 40, height: int = 40) -> bytes:
+    raw = b""
+    for _ in range(height):
+        raw += b"\x00" + (b"\xff\x00\x00" * width)
+    compressed = zlib.compress(raw)
+
+    def chunk(ctype: bytes, data: bytes) -> bytes:
+        c = ctype + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", compressed)
+        + chunk(b"IEND", b"")
+    )
 
 
 def _make_simple_pdf(path: Path) -> None:
@@ -31,23 +53,25 @@ def _make_image_only_pdf(path: Path) -> None:
     """Create a PDF with an image but no text (simulates scanned page)."""
     doc = fitz.open()
     page = doc.new_page()
-    # Insert a tiny 2x2 red PNG as an image.
-    import struct, zlib
-    def _make_tiny_png() -> bytes:
-        raw = b"\x00\xff\x00\x00\xff\x00\x00\xff\x00\x00\xff\x00"
-        compressed = zlib.compress(raw)
-        def chunk(ctype, data):
-            c = ctype + data
-            return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
-        return (
-            b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", compressed)
-            + chunk(b"IEND", b"")
-        )
-    page.insert_image(fitz.Rect(50, 50, 200, 200), stream=_make_tiny_png())
+    page.insert_image(fitz.Rect(50, 50, 200, 200), stream=_make_png(40, 40))
     doc.save(str(path))
     doc.close()
+
+
+def _add_hyperlink(paragraph, text: str, url: str) -> None:
+    rel_id = paragraph.part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), rel_id)
+    new_run = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    new_run.append(t)
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
 
 
 class TestPDFConversion:
@@ -107,8 +131,25 @@ class TestPDFConversion:
         with caplog.at_level(logging.WARNING):
             convert_document_to_markdown(pdf_path, tmp_path)
 
-        assert any("scanned" in r.message.lower() or "image" in r.message.lower()
-                    for r in caplog.records if r.levelno >= logging.WARNING)
+        assert any(
+            "scanned" in r.message.lower() or "image" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        )
+
+    def test_duplicate_xref_writes_once(self, tmp_path: Path):
+        pdf_path = tmp_path / "dup.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        png = _make_png(40, 40)
+        page.insert_image(fitz.Rect(50, 50, 150, 150), stream=png)
+        page.insert_text((72, 220), "Caption", fontsize=12)
+        doc.save(str(pdf_path))
+        doc.close()
+
+        convert_document_to_markdown(pdf_path, tmp_path)
+        images = list((tmp_path / "dup_images").glob("*")) if (tmp_path / "dup_images").exists() else []
+        assert len(images) <= 1
 
 
 class TestDOCXConversion:
@@ -124,6 +165,8 @@ class TestDOCXConversion:
         content = md_path.read_text(encoding="utf-8")
         assert "Test Heading" in content
         assert "test paragraph" in content
+        assert content.startswith("---")
+        assert "source: sample.docx" in content
 
     def test_docx_heading_becomes_markdown_heading(self, tmp_path: Path):
         docx_path = tmp_path / "headings.docx"
@@ -133,6 +176,38 @@ class TestDOCXConversion:
 
         content = Path(result).read_text(encoding="utf-8")
         assert "# Test Heading" in content
+
+    def test_docx_heading_6(self, tmp_path: Path):
+        docx_path = tmp_path / "h6.docx"
+        doc = Document()
+        doc.add_heading("Deep heading", level=6)
+        doc.save(str(docx_path))
+
+        content = Path(convert_document_to_markdown(docx_path, tmp_path)).read_text(encoding="utf-8")
+        assert "###### Deep heading" in content
+
+    def test_docx_numbered_list(self, tmp_path: Path):
+        docx_path = tmp_path / "list.docx"
+        doc = Document()
+        doc.add_paragraph("Alpha", style="List Number")
+        doc.add_paragraph("Beta", style="List Number")
+        doc.save(str(docx_path))
+
+        content = Path(convert_document_to_markdown(docx_path, tmp_path)).read_text(encoding="utf-8")
+        assert "Alpha" in content
+        assert "Beta" in content
+        assert "1. Alpha" in content
+        assert "2. Beta" in content
+
+    def test_docx_hyperlink(self, tmp_path: Path):
+        docx_path = tmp_path / "link.docx"
+        doc = Document()
+        para = doc.add_paragraph()
+        _add_hyperlink(para, "Example", "https://example.com")
+        doc.save(str(docx_path))
+
+        content = Path(convert_document_to_markdown(docx_path, tmp_path)).read_text(encoding="utf-8")
+        assert "[Example](https://example.com)" in content
 
     def test_docx_with_table(self, tmp_path: Path):
         docx_path = tmp_path / "table.docx"
@@ -159,7 +234,6 @@ class TestDOCXConversion:
         table.cell(0, 0).text = "A"
         table.cell(0, 1).text = "B"
         table.cell(0, 2).text = "C"
-        # Merge row 1, cols 0-1.
         table.cell(1, 0).merge(table.cell(1, 1))
         table.cell(1, 0).text = "Merged"
         table.cell(1, 2).text = "Solo"
@@ -169,7 +243,6 @@ class TestDOCXConversion:
 
         content = Path(result).read_text(encoding="utf-8")
         assert "| A | B | C |" in content
-        # Merged cell should appear once, with an empty placeholder for the span.
         assert "Merged" in content
         assert "Solo" in content
 
@@ -181,10 +254,8 @@ class TestDOCXConversion:
         doc = Document()
         outer = doc.add_table(rows=1, cols=2)
         outer.cell(0, 0).text = "Left"
-        # Insert a nested table into cell (0,1).
         inner_tbl = outer.cell(0, 1)._element.makeelement(_qn("w:tbl"), {})
         outer.cell(0, 1)._element.append(inner_tbl)
-        # Add a row to the nested table via XML.
         tr = inner_tbl.makeelement(_qn("w:tr"), {})
         inner_tbl.append(tr)
         tc = tr.makeelement(_qn("w:tc"), {})

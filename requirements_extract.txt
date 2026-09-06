@@ -1,8 +1,6 @@
 # Prerequisites for pdf_docx_to_markdown.py
-# Install everything with:  pip install -r requirements_extract.txt
-#
-# These are minimum compatible versions. For exact pinned versions
-# used in CI, see requirements_lock.txt.
+# Canonical versions live in pyproject.toml. This file is for CONVERT_DOCS.bat
+# and for:  pip install -r requirements_extract.txt
 
 PyMuPDF>=1.23.0       # PDF image extraction (imported as fitz)
 pdfplumber>=0.10.0    # PDF text + table extraction
